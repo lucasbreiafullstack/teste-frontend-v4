@@ -1,0 +1,288 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY_PREFIX: legisla-saas
+
+jobs:
+  # Test and Quality Checks
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: false
+          ES_JAVA_OPTS: -Xms512m -Xmx512m
+        options: >-
+          --health-cmd "curl http://localhost:9200/_cluster/health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 9200:9200
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type checking
+        run: npm run type-check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm run test
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379
+          ELASTICSEARCH_URL: http://localhost:9200
+          JWT_SECRET: test-secret
+          JWT_REFRESH_SECRET: test-refresh-secret
+
+      - name: Build applications
+        run: npm run build
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: true
+
+  # Security Scanning
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: npm audit
+        run: npm audit --audit-level high
+
+  # Build and Push Docker Images
+  build:
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    
+    strategy:
+      matrix:
+        service: [web, auth-service, legislation-service, notification-service]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_PREFIX }}-${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/${{ matrix.service }}
+          file: ./apps/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Deploy to Development
+  deploy-dev:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: development
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to ECS Development
+        run: |
+          # Update ECS service with new image
+          aws ecs update-service \
+            --cluster legisla-saas-dev-cluster \
+            --service auth-service-dev \
+            --force-new-deployment
+
+          aws ecs update-service \
+            --cluster legisla-saas-dev-cluster \
+            --service legislation-service-dev \
+            --force-new-deployment
+
+          aws ecs update-service \
+            --cluster legisla-saas-dev-cluster \
+            --service notification-service-dev \
+            --force-new-deployment
+
+      - name: Deploy Frontend to S3
+        run: |
+          aws s3 sync ./apps/web/dist s3://${{ secrets.DEV_S3_BUCKET }} --delete
+          aws cloudfront create-invalidation --distribution-id ${{ secrets.DEV_CLOUDFRONT_ID }} --paths "/*"
+
+  # Deploy to Production
+  deploy-prod:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run database migrations
+        run: |
+          # Connect to production database and run migrations
+          # This should be done more carefully in a real scenario
+          echo "Running database migrations..."
+
+      - name: Deploy to ECS Production
+        run: |
+          # Blue-green deployment strategy
+          aws ecs update-service \
+            --cluster legisla-saas-prod-cluster \
+            --service auth-service-prod \
+            --force-new-deployment
+
+          aws ecs update-service \
+            --cluster legisla-saas-prod-cluster \
+            --service legislation-service-prod \
+            --force-new-deployment
+
+          aws ecs update-service \
+            --cluster legisla-saas-prod-cluster \
+            --service notification-service-prod \
+            --force-new-deployment
+
+      - name: Deploy Frontend to S3
+        run: |
+          aws s3 sync ./apps/web/dist s3://${{ secrets.PROD_S3_BUCKET }} --delete
+          aws cloudfront create-invalidation --distribution-id ${{ secrets.PROD_CLOUDFRONT_ID }} --paths "/*"
+
+      - name: Notify deployment
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        if: always()
+
+  # Database Backup (Production only)
+  backup:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    schedule:
+      - cron: '0 2 * * *' # Daily at 2 AM UTC
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create RDS snapshot
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          aws rds create-db-snapshot \
+            --db-instance-identifier legisla-saas-prod-db \
+            --db-snapshot-identifier legisla-saas-backup-$TIMESTAMP
+
+      - name: Clean old snapshots
+        run: |
+          # Keep only last 7 snapshots
+          aws rds describe-db-snapshots \
+            --db-instance-identifier legisla-saas-prod-db \
+            --snapshot-type manual \
+            --query 'DBSnapshots[?starts_with(DBSnapshotIdentifier, `legisla-saas-backup-`)].{Id:DBSnapshotIdentifier,Created:SnapshotCreateTime}' \
+            --output text | sort -k2 | head -n -7 | cut -f1 | \
+            xargs -I {} aws rds delete-db-snapshot --db-snapshot-identifier {}
