@@ -1,46 +1,106 @@
-# Getting Started with Create React App
+# 🏛️ LegislaSaaS - Plataforma de Busca Contextual de Legislação
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+## 📋 Visão Geral
 
-## Available Scripts
+Plataforma SaaS escalável para busca contextual de legislação, inicialmente focada na Assembleia Legislativa do Estado do Rio de Janeiro (ALERJ), com arquitetura preparada para expansão para outras casas legislativas.
 
-In the project directory, you can run:
+## 🏗️ Arquitetura do Sistema
 
-### `npm start`
+### Visão de Alto Nível
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+O sistema utiliza uma **arquitetura de microsserviços híbrida** com os seguintes componentes principais:
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Frontend      │    │   API Gateway   │    │   Load Balancer │
+│   (React PWA)   │────│   (Kong/Nginx)  │────│   (AWS ALB)     │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                                │
+                ┌───────────────┼───────────────┐
+                │               │               │
+    ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+    │  Auth Service   │ │ Legislation API │ │ Notification    │
+    │  (NestJS)       │ │ (NestJS)        │ │ Service (Node)  │
+    └─────────────────┘ └─────────────────┘ └─────────────────┘
+                │               │               │
+    ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+    │   PostgreSQL    │ │   Elasticsearch │ │   Redis Cache   │
+    │   (Primary DB)  │ │   (Search)      │ │   (Sessions)    │
+    └─────────────────┘ └─────────────────┘ └─────────────────┘
+```
 
-### `npm test`
+## 🚀 Stack Tecnológica
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+### Frontend
+- **React 18** + **TypeScript** + **Vite**
+- **PWA** com Service Workers
+- **TanStack Query** para gerenciamento de estado servidor
+- **Zustand** para estado local
+- **React Hook Form** + **Zod** para formulários
+- **Tailwind CSS** + **shadcn/ui** para UI
+- **React Router v6** para roteamento
 
-### `npm run build`
+### Backend
+- **NestJS** + **TypeScript** (framework robusto para APIs enterprise)
+- **Prisma ORM** para PostgreSQL
+- **Passport.js** para autenticação
+- **Bull Queue** para processamento assíncrono
+- **Helmet** e **CORS** para segurança
+- **Winston** para logging
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+### Banco de Dados
+- **PostgreSQL 15+** com Full Text Search
+- **Elasticsearch 8.x** para busca avançada
+- **Redis** para cache e sessões
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### Infraestrutura Cloud (AWS)
+- **ECS Fargate** para containers
+- **RDS PostgreSQL** Multi-AZ
+- **OpenSearch** (Elasticsearch gerenciado)
+- **ElastiCache Redis**
+- **S3** para arquivos estáticos
+- **CloudFront CDN**
+- **Route 53** para DNS
+- **ALB** para load balancing
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## 🎯 Justificativas de Design
 
-### `npm run eject`
+### Por que Microsserviços Híbridos?
+- **Escalabilidade independente** por domínio
+- **Facilita manutenção** e deploy
+- **Isolamento de falhas**
+- **Permite equipes especializadas**
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+### Por que NestJS?
+- **Arquitetura modular** nativa
+- **TypeScript first**
+- **Decorators** para cleaner code
+- **Ecosystem robusto** (guards, interceptors, pipes)
+- **GraphQL/REST** flexibility
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+### Por que PostgreSQL + Elasticsearch?
+- **PostgreSQL**: ACID, relacionamentos complexos, full-text search nativo
+- **Elasticsearch**: Busca semântica avançada, análise de texto, performance
+- **Hybrid approach**: Melhor dos dois mundos
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+## 📁 Estrutura do Projeto
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+```
+legisla-saas/
+├── apps/
+│   ├── web/                    # React PWA Frontend
+│   ├── api-gateway/            # Kong/Nginx Gateway
+│   ├── auth-service/           # Microsserviço de Autenticação
+│   ├── legislation-service/    # Microsserviço de Legislação
+│   └── notification-service/   # Microsserviço de Notificações
+├── packages/
+│   ├── shared/                 # Código compartilhado
+│   ├── ui/                     # Componentes UI reutilizáveis
+│   └── types/                  # TypeScript definitions
+├── infrastructure/
+│   ├── terraform/              # IaC
+│   ├── docker/                 # Docker configs
+│   └── k8s/                    # Kubernetes manifests
+├── docs/                       # Documentação
+└── scripts/                    # Scripts de automação
+```
