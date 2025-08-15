@@ -1,28 +1,34 @@
 import React from 'react';
-import { BrowserRouter as Router, Route, Routes, useParams } from 'react-router-dom';
-import EquipmentMap from './components/EquipmentMap';
-import EquipmentDetails from './components/EquipmentDetails';
-import Header from './components/Header';
+import { BrowserRouter } from 'react-router-dom';
+import { ThemeProvider } from 'styled-components';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+
+import { theme } from './styles/theme';
+import { GlobalStyles } from './styles/GlobalStyles';
+import { AppRoutes } from './routes/AppRoutes';
 
 const App: React.FC = () => {
   return (
-    <Router>
-      <Header />
-      <Routes>
-        <Route path="/" element={<EquipmentMap />} />
-        <Route path="/details/:id" element={<EquipmentDetailsPage />} />
-      </Routes>
-    </Router>
-  );
-};
-
-const EquipmentDetailsPage: React.FC = () => {
-  const { id } = useParams<{ id: string }>();
-
-  return (
-    <div className="p-4">
-      {id && <EquipmentDetails equipmentId={id} />}
-    </div>
+    <ThemeProvider theme={theme}>
+      <BrowserRouter>
+        <GlobalStyles />
+        <AppRoutes />
+        
+        <ToastContainer
+          position="top-right"
+          autoClose={5000}
+          hideProgressBar={false}
+          newestOnTop={false}
+          closeOnClick
+          rtl={false}
+          pauseOnFocusLoss
+          draggable
+          pauseOnHover
+          theme="light"
+        />
+      </BrowserRouter>
+    </ThemeProvider>
   );
 };
 
